@@ -1,0 +1,62 @@
+diff --git a/mm/kasan/report.c b/mm/kasan/report.c
+index 62c01b452..4d4042ef7 100644
+--- a/mm/kasan/report.c
++++ b/mm/kasan/report.c
+@@ -49,6 +49,15 @@ enum kasan_arg_fault {
+ };
+ 
+ static enum kasan_arg_fault kasan_arg_fault __ro_after_init = KASAN_ARG_FAULT_DEFAULT;
++// Race window start is measured in the kernel module
++// unsigned long oob_window_start;
++// EXPORT_SYMBOL(oob_window_start);
++
++unsigned long oob_window_end;
++EXPORT_SYMBOL(oob_window_end);
++
++unsigned long dwp_point;
++EXPORT_SYMBOL(dwp_point);
+ 
+ /* kasan.fault=report/panic */
+ static int __init early_kasan_fault(char *arg)
+@@ -230,7 +239,19 @@ static void end_report(unsigned long *flags, const void *addr, bool is_write)
+ 	case KASAN_ARG_FAULT_REPORT:
+ 		break;
+ 	case KASAN_ARG_FAULT_PANIC:
+-		panic("kasan.fault=panic set ...\n");
++		/*
++		 * When panic() is called, the overwritten panic_cpu is accessed, allowing us
++		 * to measure the timing of the access. However, this causes a system deadlock,
++		 * requiring a reboot after each measurement. For the profiling phase, we capture
++		 * the timing right before calling panic() and return early, avoiding the need to
++		 * reboot the system for every measurement while still getting approximately
++		 * precise timing information.
++		 */
++		oob_window_end = __arch_counter_get_cntvct();
++		/* Log the measured timing values. */
++		pr_err("oob_window_end: %lx\n", oob_window_end);
++		pr_err("dwp_point: %lx\n", dwp_point);
++		// panic("kasan.fault=panic set ...\n");
+ 		break;
+ 	case KASAN_ARG_FAULT_PANIC_ON_WRITE:
+ 		if (is_write)
+diff --git a/net/wireless/mlme.c b/net/wireless/mlme.c
+index 05d44a443..2eaf5c489 100644
+--- a/net/wireless/mlme.c
++++ b/net/wireless/mlme.c
+@@ -739,6 +739,7 @@ int cfg80211_mlme_register_mgmt(struct wireless_dev *wdev, u32 snd_portid,
+ 	return err;
+ }
+ 
++extern unsigned long dwp_point;
+ void cfg80211_mlme_unregister_socket(struct wireless_dev *wdev, u32 nlportid)
+ {
+ 	struct wiphy *wiphy = wdev->wiphy;
+@@ -751,6 +752,8 @@ void cfg80211_mlme_unregister_socket(struct wireless_dev *wdev, u32 nlportid)
+ 		if (reg->nlportid != nlportid)
+ 			continue;
+ 
++		/* Measure when DWP is triggered */
++		dwp_point = __arch_counter_get_cntvct();
+ 		list_del(&reg->list);
+ 		kfree(reg);
+ 

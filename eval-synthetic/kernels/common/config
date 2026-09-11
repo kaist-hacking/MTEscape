@@ -1,0 +1,43 @@
+# ==============================================================================
+# Common Kernel Configuration for MTEscape Evaluation
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# MTE Support (Hardware Tag-Based KASAN)
+# ------------------------------------------------------------------------------
+CONFIG_KASAN=y
+# CONFIG_KASAN_GENERIC is not set
+CONFIG_KASAN_HW_TAGS=y
+# CONFIG_KASAN_SW_TAGS is not set
+CONFIG_KASAN_VMALLOC=y
+# CONFIG_KASAN_EXTRA_INFO is not set
+CONFIG_STACKDEPOT_ALWAYS_INIT=y
+
+# ------------------------------------------------------------------------------
+# Miscellaneous (Debugging, Networking, and Auto-enabled Dependencies)
+# ------------------------------------------------------------------------------
+CONFIG_KPROBES=y
+CONFIG_KRETPROBES=y
+CONFIG_KGDB=y
+CONFIG_KGDB_HONOUR_BLOCKLIST=y
+CONFIG_KGDB_SERIAL_CONSOLE=y
+# CONFIG_KGDB_TESTS is not set
+# CONFIG_KGDB_KDB is not set
+CONFIG_PTDUMP_DEBUGFS=y
+CONFIG_PTDUMP=y
+CONFIG_CONSOLE_POLL=y
+CONFIG_CFG80211=y
+CONFIG_MAC80211=y
+CONFIG_MAC80211_HWSIM=y
+CONFIG_RFKILL=y
+CONFIG_CRYPTO_CCM=y
+CONFIG_CRYPTO_CMAC=y
+CONFIG_CRYPTO_CTR=y
+CONFIG_CRYPTO_GCM=y
+CONFIG_CRYPTO_GHASH=y
+CONFIG_CRYPTO_LIB_ARC4=y
+CONFIG_CRYPTO_LIB_SHA256_GENERIC=y
+CONFIG_CRYPTO_SHA256=y
+# CONFIG_SLUB_RCU_DEBUG is not set
+# CONFIG_DEBUG_CGROUP_REF is not set
+# CONFIG_FUNCTION_ERROR_INJECTION is not set

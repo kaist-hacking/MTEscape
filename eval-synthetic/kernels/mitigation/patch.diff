@@ -1,0 +1,249 @@
+diff --git a/kernel/panic.c b/kernel/panic.c
+index b0b9a8bf4..46573f095 100644
+--- a/kernel/panic.c
++++ b/kernel/panic.c
+@@ -38,6 +38,9 @@
+ #include <linux/seq_buf.h>
+ #include <trace/events/error_report.h>
+ #include <asm/sections.h>
++#ifdef CONFIG_KASAN_HW_TAGS
++#include "../mm/kasan/kasan.h"
++#endif
+ 
+ #define PANIC_TIMER_STEP 100
+ #define PANIC_BLINK_SPD 18
+@@ -318,7 +321,7 @@ void panic(const char *fmt, ...)
+ 	va_list args;
+ 	long i, i_next = 0, len;
+ 	int state = 0;
+-	int old_cpu, this_cpu;
++	int __maybe_unused old_cpu, this_cpu;
+ 	bool _crash_kexec_post_notifiers = crash_kexec_post_notifiers;
+ 
+ 	if (panic_on_warn) {
+@@ -358,11 +361,33 @@ void panic(const char *fmt, ...)
+ 	old_cpu = PANIC_CPU_INVALID;
+ 	this_cpu = raw_smp_processor_id();
+ 
++#ifdef CONFIG_KASAN_HW_TAGS
++	/*
++	 * Hardware Tag-Based KASAN mitigation: prevent panic_cpu overwrites.
++	 *
++	 * An attacker could overwrite panic_cpu to force the panic-handling CPU
++	 * to call panic_smp_self_stop(), disabling panic handling.
++	 *
++	 * Use a random lock mechanism instead of fixed panic_cpu comparison:
++	 * - panic_random_lock_ro: read-only random value set at boot
++	 * - panic_random_lock: atomic lock initialized to panic_random_lock_ro
++	 *
++	 * Only the first CPU to exchange panic_random_lock_ro into panic_random_lock
++	 * proceeds with panic handling. Other CPUs stop themselves. This prevents
++	 * bypass via memory corruption since the lock value is unpredictable.
++	 */
++	extern int panic_random_lock_ro;
++	extern atomic_t panic_random_lock;
++	if (atomic_xchg(&panic_random_lock, panic_random_lock_ro) == panic_random_lock_ro)
++		panic_smp_self_stop();
++	atomic_set(&panic_cpu, this_cpu);
++#else
+ 	/* atomic_try_cmpxchg updates old_cpu on failure */
+ 	if (atomic_try_cmpxchg(&panic_cpu, &old_cpu, this_cpu)) {
+ 		/* go ahead */
+ 	} else if (old_cpu != this_cpu)
+ 		panic_smp_self_stop();
++#endif
+ 
+ 	console_verbose();
+ 	bust_spinlocks(1);
+@@ -373,6 +398,7 @@ void panic(const char *fmt, ...)
+ 	if (len && buf[len - 1] == '\n')
+ 		buf[len - 1] = '\0';
+ 
++		#ifndef CONFIG_KASAN_HW_TAGS
+ 	pr_emerg("Kernel panic - not syncing: %s\n", buf);
+ #ifdef CONFIG_DEBUG_BUGVERBOSE
+ 	/*
+@@ -380,6 +406,7 @@ void panic(const char *fmt, ...)
+ 	 */
+ 	if (!test_taint(TAINT_DIE) && oops_in_progress <= 1)
+ 		dump_stack();
++#endif
+ #endif
+ 
+ 	/*
+@@ -402,6 +429,27 @@ void panic(const char *fmt, ...)
+ 
+ 	panic_other_cpus_shutdown(_crash_kexec_post_notifiers);
+ 
++#ifdef CONFIG_KASAN_HW_TAGS
++	if ((kasan_mode == KASAN_MODE_ASYNC || 
++		kasan_mode == KASAN_MODE_ASYMM) &&
++		(kasan_arg_fault == KASAN_ARG_FAULT_PANIC || 
++		kasan_arg_fault == KASAN_ARG_FAULT_PANIC_ON_WRITE))
++	{
++		pr_emerg("BUG: KASAN: invalid-access\n");
++		pr_emerg("Asynchronous fault: no details available\n");
++		pr_emerg("\n");
++		dump_stack_lvl(KERN_ERR);
++	}
++	pr_emerg("Kernel panic - not syncing: %s\n", buf);
++#ifdef CONFIG_DEBUG_BUGVERBOSE
++	/*
++	 * Avoid nested stack-dumping if a panic occurs during oops processing
++	 */
++	if (!test_taint(TAINT_DIE) && oops_in_progress <= 1)
++		dump_stack();
++#endif
++#endif
++
+ 	printk_legacy_allow_panic_sync();
+ 
+ 	/*
+diff --git a/mm/kasan/kasan.h b/mm/kasan/kasan.h
+index 129178be5..83e3a7249 100644
+--- a/mm/kasan/kasan.h
++++ b/mm/kasan/kasan.h
+@@ -40,7 +40,15 @@ enum kasan_mode {
+ 	KASAN_MODE_ASYMM,
+ };
+ 
++enum kasan_arg_fault {
++	KASAN_ARG_FAULT_DEFAULT,
++	KASAN_ARG_FAULT_REPORT,
++	KASAN_ARG_FAULT_PANIC,
++	KASAN_ARG_FAULT_PANIC_ON_WRITE,
++};
++
+ extern enum kasan_mode kasan_mode __ro_after_init;
++extern enum kasan_arg_fault kasan_arg_fault __ro_after_init;
+ 
+ extern unsigned long kasan_page_alloc_sample;
+ extern unsigned int kasan_page_alloc_sample_order;
+diff --git a/mm/kasan/report.c b/mm/kasan/report.c
+index 62c01b452..f56053b0e 100644
+--- a/mm/kasan/report.c
++++ b/mm/kasan/report.c
+@@ -41,14 +41,18 @@ static unsigned long kasan_flags;
+ #define KASAN_BIT_REPORTED	0
+ #define KASAN_BIT_MULTI_SHOT	1
+ 
+-enum kasan_arg_fault {
+-	KASAN_ARG_FAULT_DEFAULT,
+-	KASAN_ARG_FAULT_REPORT,
+-	KASAN_ARG_FAULT_PANIC,
+-	KASAN_ARG_FAULT_PANIC_ON_WRITE,
+-};
+-
+-static enum kasan_arg_fault kasan_arg_fault __ro_after_init = KASAN_ARG_FAULT_DEFAULT;
++enum kasan_arg_fault kasan_arg_fault __ro_after_init = KASAN_ARG_FAULT_DEFAULT;
++#ifdef CONFIG_KASAN_HW_TAGS
++int kasan_random_lock_ro	__ro_after_init;
++atomic_t kasan_random_lock;
++EXPORT_SYMBOL(kasan_random_lock_ro);
++EXPORT_SYMBOL(kasan_random_lock);
++
++int panic_random_lock_ro	__ro_after_init;
++atomic_t panic_random_lock;
++EXPORT_SYMBOL(panic_random_lock_ro);
++EXPORT_SYMBOL(panic_random_lock);
++#endif
+ 
+ /* kasan.fault=report/panic */
+ static int __init early_kasan_fault(char *arg)
+@@ -65,6 +69,12 @@ static int __init early_kasan_fault(char *arg)
+ 	else
+ 		return -EINVAL;
+ 
++#ifdef CONFIG_KASAN_HW_TAGS
++	while(!kasan_random_lock_ro)
++		get_random_bytes(&kasan_random_lock_ro, sizeof(kasan_random_lock_ro));
++	while(!panic_random_lock_ro)
++		get_random_bytes(&panic_random_lock_ro, sizeof(panic_random_lock_ro));
++#endif
+ 	return 0;
+ }
+ early_param("kasan.fault", early_kasan_fault);
+@@ -128,6 +138,13 @@ static void report_suppress_stop(void)
+  */
+ static bool report_enabled(void)
+ {
++	/*
++	 * Check kasan_arg_fault directly instead of kasan_flags to prevent
++	 * bypassing fault handling via kasan_flags overwrites.
++	 */
++	if (kasan_arg_fault == KASAN_ARG_FAULT_PANIC ||
++	    kasan_arg_fault == KASAN_ARG_FAULT_PANIC_ON_WRITE)
++		return true;
+ 	if (test_bit(KASAN_BIT_MULTI_SHOT, &kasan_flags))
+ 		return true;
+ 	return !test_and_set_bit(KASAN_BIT_REPORTED, &kasan_flags);
+@@ -201,7 +218,9 @@ static inline void fail_non_kasan_kunit_test(void) { }
+ 
+ #endif /* CONFIG_KUNIT */
+ 
++#ifndef CONFIG_KASAN_HW_TAGS
+ static DEFINE_RAW_SPINLOCK(report_lock);
++#endif
+ 
+ static void start_report(unsigned long *flags, bool sync)
+ {
+@@ -212,8 +231,22 @@ static void start_report(unsigned long *flags, bool sync)
+ 	lockdep_off();
+ 	/* Make sure we don't end up in loop. */
+ 	report_suppress_start();
++#ifdef CONFIG_KASAN_HW_TAGS
++	/*
++	 * Hardware Tag-Based KASAN mitigation: eliminate deadlock attack surface.
++	 *
++	 * Remove logging to prevent deadlock attacks via locks like console_owner_lock,
++	 * which could block fault handling during printing. Use kasan_random_lock
++	 * instead of report_lock to prevent bypass via lock variable overwrites.
++	 */
++	while(atomic_xchg(&kasan_random_lock, kasan_random_lock_ro) == kasan_random_lock_ro);
++	if (kasan_arg_fault == KASAN_ARG_FAULT_REPORT || kasan_arg_fault == KASAN_ARG_FAULT_DEFAULT ||
++		kasan_mode == KASAN_MODE_SYNC)
++		pr_err("==================================================================\n");
++#else
+ 	raw_spin_lock_irqsave(&report_lock, *flags);
+ 	pr_err("==================================================================\n");
++#endif
+ }
+ 
+ static void end_report(unsigned long *flags, const void *addr, bool is_write)
+@@ -221,8 +254,16 @@ static void end_report(unsigned long *flags, const void *addr, bool is_write)
+ 	if (addr)
+ 		trace_error_report_end(ERROR_DETECTOR_KASAN,
+ 				       (unsigned long)addr);
++#ifdef CONFIG_KASAN_HW_TAGS
++	/* Same mitigation as start_report: remove redundant logging and use random lock. */
++	if (kasan_arg_fault == KASAN_ARG_FAULT_REPORT || kasan_arg_fault == KASAN_ARG_FAULT_DEFAULT ||
++		kasan_mode == KASAN_MODE_SYNC)
++		pr_err("==================================================================\n");
++	atomic_set(&kasan_random_lock, 0);
++#else
+ 	pr_err("==================================================================\n");
+ 	raw_spin_unlock_irqrestore(&report_lock, *flags);
++#endif
+ 	if (!test_bit(KASAN_BIT_MULTI_SHOT, &kasan_flags))
+ 		check_panic_on_warn("KASAN");
+ 	switch (kasan_arg_fault) {
+@@ -616,10 +657,15 @@ void kasan_report_async(void)
+ 		return;
+ 
+ 	start_report(&flags, false);
+-	pr_err("BUG: KASAN: invalid-access\n");
+-	pr_err("Asynchronous fault: no details available\n");
+-	pr_err("\n");
+-	dump_stack_lvl(KERN_ERR);
++	/* Remove redundant logging to minimize deadlock attack surface. */
++	if (kasan_arg_fault == KASAN_ARG_FAULT_REPORT ||
++		kasan_arg_fault == KASAN_ARG_FAULT_DEFAULT)
++	{
++		pr_err("BUG: KASAN: invalid-access\n");
++		pr_err("Asynchronous fault: no details available\n");
++		pr_err("\n");
++		dump_stack_lvl(KERN_ERR);
++	}
+ 	/*
+ 	 * Conservatively set is_write=true, because no details are available.
+ 	 * In this mode, kasan.fault=panic_on_write is like kasan.fault=panic.

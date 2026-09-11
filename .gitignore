@@ -1,0 +1,44 @@
+# Kernel source directories (cloned during setup)
+**/linux-6.16/
+
+# Setup markers
+**/.clone_complete
+eval-synthetic/.lmbench_complete
+
+# Benchmark build artifacts
+eval-synthetic/kernels/common/benchmark/lmbench/
+
+# Built kernel modules
+eval-synthetic/kernels/profiling/module/
+eval-synthetic/kernels/baseline/module/
+eval-synthetic/kernels/mitigation/module/
+
+# Kernel module binaries
+**/vuln.ko
+
+# Kernel module build artifacts
+eval-synthetic/kernels/common/kernel_module/*.o
+eval-synthetic/kernels/common/kernel_module/*.ko
+eval-synthetic/kernels/common/kernel_module/*.mod
+eval-synthetic/kernels/common/kernel_module/*.mod.c
+eval-synthetic/kernels/common/kernel_module/.*.cmd
+eval-synthetic/kernels/common/kernel_module/Module.symvers
+eval-synthetic/kernels/common/kernel_module/modules.order
+
+# Exploit build
+eval-synthetic/exploits/oob-profile
+eval-synthetic/exploits/oob-exploit
+eval-synthetic/exploits/uaf-exploit
+eval-synthetic/kernels/common/helper/kill-switch-helper
+**/exploit/exploit
+**/evaluation/exploit
+
+# Evaluation results
+eval-synthetic/evaluation/evaluation-result-uaf/
+eval-synthetic/evaluation/evaluation-result-oob/
+eval-synthetic/evaluation/evaluation-result-uaf-noise/
+eval-synthetic/evaluation/evaluation-result-oob-noise/
+eval-synthetic/evaluation/evaluation-result-perf/
+
+# Race stabilization logs
+eval-race-stabilization/**/log_*.txt
